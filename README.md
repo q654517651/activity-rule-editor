@@ -1,0 +1,133 @@
+# ActivityRuleEditor
+
+一个用于解析 Excel 活动规则文档并渲染为高质量 PNG 图片的工具链。
+
+## 功能特点
+
+- 📊 **Excel 解析**：从特定格式的 Excel 文件中提取结构化数据
+- 📑 **多 Sheet 支持**：自动识别并处理多个工作表（基于 REGION- 标记）
+- 🎨 **Canvas 渲染**：基于 Konva 的高质量 Canvas 渲染
+- 🖼️ **图片管理**：内存 blob 存储，自动提取和缓存嵌入图片
+- 📤 **批量导出**：支持多 sheet 分文件夹批量导出高分辨率 PNG 图片
+- 🌐 **Web 应用**：纯 Web 应用，无需安装客户端
+- 🔄 **智能切换**：左侧导航快速切换不同工作表
+
+## 项目结构
+
+```
+ActivityRuleEditor/
+├── backend/              # Python 后端（FastAPI）
+│   ├── api/             # API 路由
+│   ├── services/        # 核心服务（解析器、图片提取器、blob 存储）
+│   └── models.py        # 数据模型
+└── web/                 # 前端应用（React + Vite + Konva）
+    └── src/             # 源代码
+        ├── pages/       # 页面组件
+        └── renderer/    # Canvas 渲染器
+```
+
+## 快速开始
+
+### 环境要求
+
+- Python 3.8+
+- Node.js 16+
+- pnpm
+
+### 后端启动
+
+```bash
+# 安装依赖
+python -m venv .venv
+.\.venv\Scripts\activate  # Windows
+# source .venv/bin/activate  # macOS/Linux
+pip install openpyxl fastapi uvicorn python-multipart
+
+# 启动 API 服务器
+python -m uvicorn backend.api.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+### 前端启动
+
+```bash
+cd web
+pnpm install
+pnpm dev  # 启动开发服务器
+```
+
+访问 `http://localhost:5173` 开始使用。
+
+## Excel 格式说明
+
+Excel 文件使用特定的标记系统进行结构化：
+
+- `REGION-xxx`：定义页面区域（纵向分割）
+  - **重要**：只有第一行包含 `REGION-` 标记的 sheet 会被解析
+  - 未包含此标记的 sheet 会被自动跳过
+- `TITLE-xxx`：定义段落标题（横向分割）
+- `RULES-xxx`：标记规则内容
+- `RINK-xxx`：标记奖励列表
+
+### 多工作表支持
+
+- ✅ 自动扫描 Excel 中所有 sheet
+- ✅ 只处理包含 `REGION-` 标记的 sheet
+- ✅ 导出时每个 sheet 生成独立文件夹
+- ✅ 支持左侧导航快速切换
+
+详细格式说明请查看 [README_EXCEL_PARSING.md](README_EXCEL_PARSING.md)。
+
+## API 文档
+
+### 主要端点
+
+- `POST /api/parse`：上传并解析 Excel 文件
+- `GET /media/{blob_hash}`：获取存储的图片
+- `GET /health`：健康检查
+
+详细 API 配置请查看 [API_SETUP.md](API_SETUP.md)。
+
+## 技术栈
+
+**后端：**
+- Python 3.x
+- FastAPI
+- openpyxl
+
+**前端：**
+- React 18
+- TypeScript
+- Vite
+- Konva / react-konva
+- HeroUI + Tailwind CSS
+
+## 开发指南
+
+详细的开发指导和架构说明请查看：
+- [CLAUDE.md](CLAUDE.md) - AI 助手开发指南
+- [API_SETUP.md](API_SETUP.md) - API 配置与调试
+- [README_EXCEL_PARSING.md](README_EXCEL_PARSING.md) - Excel 解析逻辑详解
+
+## 构建与部署
+
+### 前端构建
+
+```bash
+cd web
+pnpm build  # 构建生产版本
+```
+
+### 生产部署
+
+**后端：**
+```bash
+python -m uvicorn backend.api.main:app --host 0.0.0.0 --port 8000
+```
+
+**前端：**
+将 `web/dist/` 目录部署到 Web 服务器或 CDN。
+
+## 许可证
+
+本项目仅供内部使用。
+
