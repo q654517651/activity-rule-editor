@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState, useRef, useCallback, useLayoutEffect } from 'react';
 import { Group, Image as KImage, Text, Rect } from 'react-konva';
 import type { Page, StyleCfg, Reward, Section } from './types';
 import { loadBitmap } from './useImageCache';
@@ -307,12 +307,32 @@ export function PageCanvas({
   const innerH = sectionsH;
   const H = PAD.t + innerH + PAD.b;
 
+  // 防止无限循环：只在高度确实变化时上报，且用 RAF 合批
+  const lastReportedRef = useRef<number | null>(null);
+  const rafRef = useRef<number | null>(null);
+
+  const reportHeight = useCallback((h: number) => {
+    if (!Number.isFinite(h) || h <= 0) return;
+    // 变化小于 1px 视为相同，不上报
+    if (lastReportedRef.current !== null && Math.abs(lastReportedRef.current - h) < 1) return;
+
+    lastReportedRef.current = h;
+    if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
+    rafRef.current = requestAnimationFrame(() => {
+      onMeasured?.(h);
+      rafRef.current = null;
+    });
+  }, [onMeasured]);
+
+  useLayoutEffect(() => {
+    reportHeight(H);
+  }, [H, reportHeight]);
+
   useEffect(() => {
-    // 仅在高度变化时告知父组件，避免因回调引用变化造成的无限循环
-    if (typeof H === 'number' && isFinite(H)) {
-      onMeasured?.(H);
-    }
-  }, [H]);
+    return () => {
+      if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
+    };
+  }, []);
 
   // 计算每个 section 的 Y 坐标
   // 页面标题已移至 Canvas 外部，从 contentY 直接开始

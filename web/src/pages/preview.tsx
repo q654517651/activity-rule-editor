@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, memo, useDeferredValue } from 'react';
 import { Stage, Layer } from 'react-konva';
-import { Button, Input, Dropdown, DropdownItem, DropdownMenu, DropdownTrigger, ScrollShadow, Spinner, Tabs, Tab } from '@heroui/react';
-import type { Data, StyleCfg } from '@/renderer/canvas/types';
+import { Button, Input, Dropdown, DropdownItem, DropdownMenu, DropdownTrigger, ScrollShadow, Spinner, Tabs, Tab, Skeleton } from '@heroui/react';
+import type { Data, StyleCfg, Page } from '@/renderer/canvas/types';
 import type { ExportProgress, ExportPhase, ParseResponse } from '@/types';
 import { PageCanvas } from '@/renderer/canvas/PageCanvas';
 import { exportPagesToPng } from '@/renderer/canvas';
@@ -20,6 +20,147 @@ function defaultStyle(): StyleCfg {
 }
 
 const API_BASE = 'http://127.0.0.1:8000';
+
+// 图片位图缓存
+const imageBitmapCache = new Map<string, ImageBitmap>();
+
+// 异步加载图片位图
+export async function loadImageBitmap(url: string): Promise<ImageBitmap | null> {
+  try {
+    if (imageBitmapCache.has(url)) return imageBitmapCache.get(url)!;
+    const res = await fetch(url, { cache: 'force-cache' });
+    const blob = await res.blob();
+    const bmp = await createImageBitmap(blob, { premultiplyAlpha: 'premultiply' });
+    imageBitmapCache.set(url, bmp);
+    return bmp;
+  } catch (e) {
+    console.error('加载图片失败:', url, e);
+    return null;
+  }
+}
+
+// 结构化估高函数 - 避免内容被裁剪
+function estimatePageHeight(page: Page, style: StyleCfg): number {
+  const base = style.pad.t + style.pad.b + 200;
+  const sections = page.blocks ?? page.sections ?? [];
+  const blocks = sections.length;
+  const lines = sections.reduce((acc, s: any) => {
+    const rewards = (s.rewards ?? []).length;
+    const contentLines = (s.content ?? []).length;
+    return acc + 2 + Math.ceil(rewards * 1.5) + contentLines;
+  }, 0);
+  return base + blocks * 180 + lines * style.font.size * style.font.lineHeight;
+}
+
+// 单个画布单元组件 - 使用 Intersection Observer 检测可见性
+const CanvasCell = memo(function CanvasCell({
+  page, 
+  style, 
+  zoomPct, 
+  estHeight, 
+  onMeasured,
+}: {
+  page: any;
+  style: StyleCfg;
+  zoomPct: number;
+  estHeight: number;
+  onMeasured: (h: number) => void;
+}) {
+  // 固定基准尺寸
+  const baseWidth = style.pageWidth;
+  const baseHeight = estHeight;
+  const scale = zoomPct / 100;
+  const scaledW = Math.round(baseWidth * scale);
+  const scaledH = Math.round(baseHeight * scale);
+
+  // 使用 Intersection Observer 检测可见性
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [isVisible, setIsVisible] = useState(false);
+
+  useEffect(() => {
+    const element = containerRef.current;
+    if (!element) return;
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        setIsVisible(entry.isIntersecting);
+      },
+      {
+        root: null,
+        rootMargin: '400px', // 提前 400px 开始加载
+        threshold: 0,
+      }
+    );
+
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
+  return (
+    <div
+      ref={containerRef}
+      style={{
+        width: scaledW,
+        height: scaledH,
+        display: 'inline-block',
+        paddingRight: 16,
+      }}
+    >
+      {page.region && (
+        <div className="text-sm font-semibold text-black mb-2">
+          页面{page.region}
+        </div>
+      )}
+      <div
+        style={{
+          position: 'relative',
+          width: scaledW,
+          height: scaledH,
+          background: '#fff',
+          borderRadius: 8,
+          boxShadow: '0 1px 3px rgba(0,0,0,.1)',
+          overflow: 'hidden',
+        }}
+      >
+        {/* 骨架屏占位 - 固定尺寸 */}
+        <div className="absolute inset-0 bg-gray-50">
+          <Skeleton className="w-full h-full rounded-lg">
+            <div style={{ width: '100%', height: '100%' }} />
+          </Skeleton>
+        </div>
+
+        {/* ✅ 只有可见时才挂载 Konva Stage */}
+        {isVisible && (
+          <Stage
+            width={baseWidth}
+            height={baseHeight}
+            scaleX={scale}
+            scaleY={scale}
+            pixelRatio={1}
+            listening={false}
+            style={{ position: 'absolute', inset: 0 }}
+          >
+            <Layer perfectDrawEnabled={false} listening={false}>
+              <PageCanvas
+                page={page}
+                style={style}
+                onMeasured={onMeasured}
+              />
+            </Layer>
+          </Stage>
+        )}
+      </div>
+    </div>
+  );
+}, (a, b) => {
+  const heightDiff = Math.abs(a.estHeight - b.estHeight);
+  return (
+    a.page === b.page &&
+    a.zoomPct === b.zoomPct &&
+    heightDiff < 5 &&
+    a.style === b.style
+  );
+});
 
 function filenameOf(p: string) {
   try {
@@ -79,8 +220,10 @@ export default function PreviewPage() {
   // 当前 sheet 的数据（从 allSheets 中获取）
   const [data, setData] = useState<Data>({ pages: [] });
   const [style, setStyle] = useState<StyleCfg>(defaultStyle());
+  const [debouncedStyle, setDebouncedStyle] = useState<StyleCfg>(defaultStyle()); // 用于画布渲染
   const [pixelRatio, setPixelRatio] = useState(1);
   const [zoomPct, setZoomPct] = useState(50);
+  const deferredZoom = useDeferredValue(zoomPct); // 延迟缩放变化
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [heights, setHeights] = useState<number[]>([]);
@@ -92,35 +235,27 @@ export default function PreviewPage() {
   const [zipPercent, setZipPercent] = useState(0);
   const [writePercent, setWritePercent] = useState(0);
 
-  // 防抖样式更新器 - 停止输入 500ms 后才刷新画布
+  // 防抖更新画布样式 - style 变化后 500ms 更新 debouncedStyle
   const debounceTimerRef = useRef<number | null>(null);
-  const pendingStyle = useRef<Partial<StyleCfg>>({});
 
-  const setStyleDebounced = useCallback((partial: Partial<StyleCfg>) => {
-    pendingStyle.current = { ...pendingStyle.current, ...partial };
-    
+  useEffect(() => {
     // 清除之前的定时器
     if (debounceTimerRef.current != null) {
       clearTimeout(debounceTimerRef.current);
     }
     
-    // 设置新的定时器：500ms 后更新
+    // 设置新的定时器：500ms 后更新画布样式
     debounceTimerRef.current = window.setTimeout(() => {
-      if (Object.keys(pendingStyle.current).length > 0) {
-        setStyle(s => ({ ...s, ...pendingStyle.current }));
-        pendingStyle.current = {};
-      }
+      setDebouncedStyle(style);
       debounceTimerRef.current = null;
     }, 500);
-  }, []);
-
-  useEffect(() => {
+    
     return () => {
       if (debounceTimerRef.current != null) {
         clearTimeout(debounceTimerRef.current);
       }
     };
-  }, []);
+  }, [style]);
 
   const onPickJson = useCallback(async (file: File) => {
     setLoading(true);
@@ -221,13 +356,13 @@ export default function PreviewPage() {
     }
   }, []);
 
-  // Sheet 切换处理
+  // Sheet 切换处理 - 简单清理即可，虚拟化会自动处理
   const onSheetChange = useCallback((sheetName: string) => {
     const sheetData = allSheets.get(sheetName);
     if (sheetData) {
       setCurrentSheet(sheetName);
       setData(sheetData);
-      setHeights([]);  // 重置高度缓存
+      setHeights([]);
     }
   }, [allSheets]);
 
@@ -252,7 +387,7 @@ export default function PreviewPage() {
       
       // 遍历所有 sheet，分别渲染
       for (const [sheetName, sheetData] of allSheets) {
-        const items = await exportPagesToPng(sheetData, style, pixelRatio, (progress: ExportProgress) => {
+        const items = await exportPagesToPng(sheetData, debouncedStyle, pixelRatio, (progress: ExportProgress) => {
           if (progress.phase === 'render') {
             setRenderCurr(currentPage + progress.current);
           }
@@ -290,26 +425,55 @@ export default function PreviewPage() {
         setWritePercent(0);
       }, 1500);
     }
-  }, [allSheets, style, pixelRatio]);
+  }, [allSheets, debouncedStyle, pixelRatio]);
 
-  // 当页数变化时，初始化高度数组，避免 undefined 参与计算
+  // 当页数变化时，使用结构化估高初始化高度数组
   useEffect(() => {
     setHeights((prev) => {
-      const next = new Array(data.pages.length).fill(1000);
-      for (let i = 0; i < Math.min(prev.length, next.length); i++) next[i] = prev[i] || 1000;
+      const next = data.pages.map(p => estimatePageHeight(p, debouncedStyle));
+      // 保留已测量的精确高度
+      for (let i = 0; i < Math.min(prev.length, next.length); i++) {
+        if (prev[i] && prev[i] > next[i]) next[i] = prev[i];
+      }
       return next;
     });
-  }, [data.pages.length]);
+  }, [data.pages.length, debouncedStyle]);
 
-  // 稳定每页测量回调，避免闭包新建导致子组件 effect 重跑
+  // 批量测量回调 - RAF 合并多次更新为一次 setState
+  const heightsRef = useRef<number[]>([]);
+  useEffect(() => { heightsRef.current = heights; }, [heights]);
+
+  const pendingRef = useRef<Map<number, number>>(new Map());
+  const rafRefHeights = useRef<number | null>(null);
+
   const onMeasuredByIndex = useCallback((idx: number) => (h: number) => {
-    if (typeof h !== 'number' || !isFinite(h) || h <= 0) return;
-    setHeights((arr) => {
-      if (arr[idx] === h) return arr;
-      const next = [...arr];
-      next[idx] = h;
-      return next;
-    });
+    if (!Number.isFinite(h) || h <= 0) return;
+
+    const prev = heightsRef.current[idx];
+    // 变化小于 5px 视为相同，避免抖动
+    if (prev != null && Math.abs(prev - h) < 5) return;
+
+    pendingRef.current.set(idx, h);
+
+    if (rafRefHeights.current == null) {
+      rafRefHeights.current = requestAnimationFrame(() => {
+        setHeights((arr) => {
+          const next = arr.slice();
+          for (const [i, v] of pendingRef.current) next[i] = v;
+          pendingRef.current.clear();
+          return next;
+        });
+        rafRefHeights.current = null;
+      });
+    }
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (rafRefHeights.current != null) {
+        cancelAnimationFrame(rafRefHeights.current);
+      }
+    };
   }, []);
 
   // 判断是否显示多 sheet 导航
@@ -352,10 +516,10 @@ export default function PreviewPage() {
             icon="🖼️"
           />
           <div className="grid grid-cols-4 gap-2 mt-3">
-            <Input size="sm" type="number" label="Top" value={String(style.border.slice.t)} onValueChange={(v)=>setStyleDebounced({ border:{ ...style.border, slice:{ ...style.border.slice, t:Number(v||0) } } })} />
-            <Input size="sm" type="number" label="Right" value={String(style.border.slice.r)} onValueChange={(v)=>setStyleDebounced({ border:{ ...style.border, slice:{ ...style.border.slice, r:Number(v||0) } } })} />
-            <Input size="sm" type="number" label="Bottom" value={String(style.border.slice.b)} onValueChange={(v)=>setStyleDebounced({ border:{ ...style.border, slice:{ ...style.border.slice, b:Number(v||0) } } })} />
-            <Input size="sm" type="number" label="Left" value={String(style.border.slice.l)} onValueChange={(v)=>setStyleDebounced({ border:{ ...style.border, slice:{ ...style.border.slice, l:Number(v||0) } } })} />
+            <Input size="sm" type="number" label="Top" value={String(style.border.slice.t)} onValueChange={(v)=>setStyle(s=>({ ...s, border:{ ...s.border, slice:{ ...s.border.slice, t:Number(v||0) } } }))} />
+            <Input size="sm" type="number" label="Right" value={String(style.border.slice.r)} onValueChange={(v)=>setStyle(s=>({ ...s, border:{ ...s.border, slice:{ ...s.border.slice, r:Number(v||0) } } }))} />
+            <Input size="sm" type="number" label="Bottom" value={String(style.border.slice.b)} onValueChange={(v)=>setStyle(s=>({ ...s, border:{ ...s.border, slice:{ ...s.border.slice, b:Number(v||0) } } }))} />
+            <Input size="sm" type="number" label="Left" value={String(style.border.slice.l)} onValueChange={(v)=>setStyle(s=>({ ...s, border:{ ...s.border, slice:{ ...s.border.slice, l:Number(v||0) } } }))} />
           </div>
         </div>
 
@@ -371,7 +535,7 @@ export default function PreviewPage() {
               value={style.titleColor}
               onValueChange={(v) => {
                 if (/^#[0-9a-fA-F]{6}$/.test(v)) {
-                  setStyleDebounced({ titleColor: v });
+                  setStyle(s => ({ ...s, titleColor: v }));
                 }
               }}
               placeholder="#000000"
@@ -389,7 +553,7 @@ export default function PreviewPage() {
                   <input
                     type="color"
                     value={style.titleColor}
-                    onChange={(e) => setStyleDebounced({ titleColor: e.target.value })}
+                    onChange={(e) => setStyle(s => ({ ...s, titleColor: e.target.value }))}
                     className="absolute inset-0 opacity-0 cursor-pointer"
                     style={{ pointerEvents: 'auto' }}
                   />
@@ -407,7 +571,7 @@ export default function PreviewPage() {
               value={style.contentColor}
               onValueChange={(v) => {
                 if (/^#[0-9a-fA-F]{6}$/.test(v)) {
-                  setStyleDebounced({ contentColor: v });
+                  setStyle(s => ({ ...s, contentColor: v }));
                 }
               }}
               placeholder="#000000"
@@ -425,7 +589,7 @@ export default function PreviewPage() {
                   <input
                     type="color"
                     value={style.contentColor}
-                    onChange={(e) => setStyleDebounced({ contentColor: e.target.value })}
+                    onChange={(e) => setStyle(s => ({ ...s, contentColor: e.target.value }))}
                     className="absolute inset-0 opacity-0 cursor-pointer"
                     style={{ pointerEvents: 'auto' }}
                   />
@@ -434,14 +598,14 @@ export default function PreviewPage() {
             />
           </div>
 
-          {/* 内边距 - 使用防抖更新 */}
+          {/* 内边距 */}
           <div>
             <label className="text-xs font-medium text-gray-700 block mb-2">内边距</label>
             <div className="grid grid-cols-4 gap-2">
-              <Input size="sm" type="number" label="上" value={String(style.pad.t)} onValueChange={(v)=>setStyleDebounced({ pad:{ ...style.pad, t:Number(v||0) } })} />
-              <Input size="sm" type="number" label="右" value={String(style.pad.r)} onValueChange={(v)=>setStyleDebounced({ pad:{ ...style.pad, r:Number(v||0) } })} />
-              <Input size="sm" type="number" label="下" value={String(style.pad.b)} onValueChange={(v)=>setStyleDebounced({ pad:{ ...style.pad, b:Number(v||0) } })} />
-              <Input size="sm" type="number" label="左" value={String(style.pad.l)} onValueChange={(v)=>setStyleDebounced({ pad:{ ...style.pad, l:Number(v||0) } })} />
+              <Input size="sm" type="number" label="上" value={String(style.pad.t)} onValueChange={(v)=>setStyle(s=>({ ...s, pad:{ ...s.pad, t:Number(v||0) } }))} />
+              <Input size="sm" type="number" label="右" value={String(style.pad.r)} onValueChange={(v)=>setStyle(s=>({ ...s, pad:{ ...s.pad, r:Number(v||0) } }))} />
+              <Input size="sm" type="number" label="下" value={String(style.pad.b)} onValueChange={(v)=>setStyle(s=>({ ...s, pad:{ ...s.pad, b:Number(v||0) } }))} />
+              <Input size="sm" type="number" label="左" value={String(style.pad.l)} onValueChange={(v)=>setStyle(s=>({ ...s, pad:{ ...s.pad, l:Number(v||0) } }))} />
             </div>
           </div>
         </div>
@@ -493,78 +657,55 @@ export default function PreviewPage() {
       }}>
         {/* 顶部导航栏 - 固定 */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 bg-white flex-shrink-0">
-          <div className="flex items-center gap-4">
-            {/* Sheet Tabs（多 sheet 时显示） */}
-            {isMultiSheet && (
-              <Tabs 
-                selectedKey={currentSheet}
-                onSelectionChange={(key) => onSheetChange(key as string)}
-                size="sm"
-                variant="underlined"
-                classNames={{
-                  tabList: "gap-6",
-                  cursor: "w-full bg-blue-500",
-                  tab: "max-w-fit px-0 h-10",
-                  tabContent: "group-data-[selected=true]:text-blue-500"
-                }}
-              >
-                {sheetNames.map(name => (
-                  <Tab 
-                    key={name} 
-                    title={
-                      <div className="flex items-center gap-2">
-                        <span>{name}</span>
-                        <span className="text-xs opacity-60">({allSheets.get(name)?.pages?.length || 0})</span>
-                      </div>
-                    }
-                  />
-                ))}
-              </Tabs>
-            )}
-            
-            {/* 缩放控制 */}
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-gray-500">缩放</span>
-              <Dropdown>
-                <DropdownTrigger>
-                  <Button size="sm" variant="flat">{zoomPct}%</Button>
-                </DropdownTrigger>
-                <DropdownMenu selectionMode="single" selectedKeys={new Set([String(zoomPct)])} onSelectionChange={(keys)=>{ const k=Array.from(keys as Set<string>)[0]; if (k) setZoomPct(Number(k)); }}>
-                  <DropdownItem key="25">25%</DropdownItem>
-                  <DropdownItem key="50">50%</DropdownItem>
-                  <DropdownItem key="75">75%</DropdownItem>
-                  <DropdownItem key="100">100%</DropdownItem>
-                </DropdownMenu>
-              </Dropdown>
-              <span className="text-sm text-gray-500">共 {data.pages?.length || 0} 页</span>
-            </div>
+          {/* Sheet Tabs（多 sheet 时显示） */}
+          {isMultiSheet && (
+            <Tabs 
+              selectedKey={currentSheet}
+              onSelectionChange={(key) => onSheetChange(key as string)}
+              aria-label="工作表切换"
+            >
+              {sheetNames.map(name => (
+                <Tab key={name} title={name} />
+              ))}
+            </Tabs>
+          )}
+          
+          {/* 右侧：缩放和页数控制 */}
+          <div className="flex items-center gap-2 ml-auto">
+            <span className="text-sm text-gray-500">缩放</span>
+            <Dropdown>
+              <DropdownTrigger>
+                <Button size="sm" variant="flat">{zoomPct}%</Button>
+              </DropdownTrigger>
+              <DropdownMenu selectionMode="single" selectedKeys={new Set([String(zoomPct)])} onSelectionChange={(keys)=>{ const k=Array.from(keys as Set<string>)[0]; if (k) setZoomPct(Number(k)); }}>
+                <DropdownItem key="25">25%</DropdownItem>
+                <DropdownItem key="50">50%</DropdownItem>
+                <DropdownItem key="75">75%</DropdownItem>
+                <DropdownItem key="100">100%</DropdownItem>
+              </DropdownMenu>
+            </Dropdown>
+            <span className="text-sm text-gray-500">共 {data.pages?.length || 0} 页</span>
           </div>
         </div>
 
-        {/* 可滚动的画布容器 - 支持横向和纵向滚动 */}
+        {/* 横向滚动画布容器 - 使用 Intersection Observer 懒加载 */}
         <div style={{ 
-          flex: 1, 
+          flex: 1,
+          backgroundColor: '#f9fafb',
           overflow: 'auto',
-          padding: 16,
-          backgroundColor: '#f9fafb'
+          padding: 16
         }}>
           <div style={{ display: 'flex', gap: 16, width: 'max-content' }}>
-          {data.pages.map((p, i) => (
-            <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {p.region && (
-                <div className="text-sm font-semibold text-black">
-                  页面{p.region}
-                </div>
-              )}
-              <div style={{ position: 'relative', width: Math.round(style.pageWidth * (zoomPct/100)), height: Math.round((heights[i] || 1000) * (zoomPct/100)), transform: `scale(${zoomPct/100})`, transformOrigin: 'top left' }}>
-                <Stage width={style.pageWidth} height={(heights[i] && isFinite(heights[i])) ? heights[i] : 1000}>
-                  <Layer>
-                    <PageCanvas page={p} style={style} onMeasured={onMeasuredByIndex(i)} />
-                  </Layer>
-                </Stage>
-              </div>
-            </div>
-          ))}
+            {data.pages.map((page, index) => (
+              <CanvasCell
+                key={`${currentSheet}-${index}`}
+                page={page}
+                style={debouncedStyle}
+                zoomPct={deferredZoom}
+                estHeight={heights[index] || 1200}
+                onMeasured={onMeasuredByIndex(index)}
+              />
+            ))}
           </div>
         </div>
       </section>
