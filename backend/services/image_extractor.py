@@ -186,6 +186,84 @@ def extract_images_for_result(
                 sections_to_process = page.get('sections', [])
 
             for sec in sections_to_process:
+                # 处理表格中的图片
+                table = sec.get('table')
+                if table and isinstance(table, dict):
+                    rows = table.get('rows') or []
+                    for row_list in rows:
+                        if not isinstance(row_list, list):
+                            continue
+                        for cell in row_list:
+                            if not isinstance(cell, dict):
+                                continue
+                            
+                            # 检查是否有内部定位字段
+                            row = cell.get('_row')
+                            col = cell.get('_col')
+                            
+                            if not row or not col:
+                                continue
+                            
+                            # 按锚点查找嵌入图片（即使单元格没有标记为 is_image，也要检查该位置是否有图片）
+                            media = a_map.get((int(row), int(col)))
+                            if not media or media not in zf.namelist():
+                                # 如果该位置没有图片且单元格标记为 is_image，记录警告
+                                if cell.get('is_image'):
+                                    print(f"[image_extractor] 警告：表格单元格 ({row}, {col}) 标记为图片但未找到嵌入图片")
+                                continue
+                            
+                            try:
+                                data = zf.read(media)
+                                ext = os.path.splitext(media)[1].lower() or '.png'
+                                
+                                # 通过回调存入 blob，获得哈希
+                                blob_hash = put_blob(data, ext)
+                                
+                                # 获取 MIME 类型
+                                mime, _ = mimetypes.guess_type(media)
+                                if not mime:
+                                    mime = 'application/octet-stream'
+                                
+                                # 构造 ImageMeta
+                                image_meta: Dict[str, Any] = {
+                                    'id': f'sha256:{blob_hash}',
+                                    'url': f'/media/{blob_hash}',
+                                    'mime': mime,
+                                }
+                                
+                                # 获取图片尺寸（如果可能）
+                                try:
+                                    from PIL import Image as PILImage
+                                    import io as io_module
+                                    img = PILImage.open(io_module.BytesIO(data))
+                                    image_meta['w'] = img.width
+                                    image_meta['h'] = img.height
+                                except:
+                                    pass
+                                
+                                # 清理化文件名用于映射
+                                exp = cell.get('_expected') or 'table_image'
+                                clean = safe_filename(str(exp), mime)
+                                images_map[clean] = image_meta['url']
+                                
+                                # 回填 result，并标记为图片
+                                cell['image'] = image_meta
+                                cell['is_image'] = True  # 确保标记为图片
+                                
+                                print(f"[image_extractor] 已提取表格图片: {clean} -> {blob_hash[:12]}...")
+                                
+                            except Exception as e:
+                                print(f"[image_extractor] 提取表格图片失败: {e}")
+                                continue
+                        
+                        # 清理该行所有单元格的元字段
+                        for cell in row_list:
+                            if isinstance(cell, dict):
+                                for k in list(cell.keys()):
+                                    if k.startswith('_'):
+                                        cell.pop(k, None)
+                
+                # 处理奖励中的图片
                 rewards = sec.get('rewards') or []
                 for r in rewards:
                     # 检查是否有内部定位字段
@@ -222,6 +300,16 @@ def extract_images_for_result(
                             'url': f'/media/{blob_hash}',
                             'mime': mime,
                         }
+                        
+                        # 获取图片尺寸（如果可能）
+                        try:
+                            from PIL import Image as PILImage
+                            import io as io_module
+                            img = PILImage.open(io_module.BytesIO(data))
+                            image_meta['w'] = img.width
+                            image_meta['h'] = img.height
+                        except:
+                            pass
 
                         # 清理化文件名用于映射
                         exp = r.get('_expected') or r.get('name') or 'image'

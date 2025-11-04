@@ -118,7 +118,7 @@ def parse_section_block(ws, c1, c2, r_start, r_end, merge_idx):
             rv = row_region_values(ws, rr, c1, c2, merge_idx)
             first = rv[0] if rv else ""
             # stop if next block begins (but allow first line)
-            if first.startswith("TITLE-") or first.startswith("RINK-") or first.startswith("RULES-"):
+            if first.startswith("TITLE-") or first.startswith("RINK-") or first.startswith("RULES-") or first.startswith("TABLE-"):
                 if rr != r0:
                     break
             if is_row_blank(rv):
@@ -147,6 +147,115 @@ def parse_section_block(ws, c1, c2, r_start, r_end, merge_idx):
         sections.append({"title": section_title, "content": "", "rewards": items})
         return rr
 
+    def collect_table(r0):
+        """
+        收集表格数据
+        TABLE- 标记可能在任意列，下一行是表头
+        后续行直到下一个 TABLE- 或其他标记为止
+        支持文字和图片（图片以 image: 或直接文件名形式）
+        """
+        table_data = {
+            "type": "table",
+            "headers": [],
+            "rows": []
+        }
+        
+        rr = r0 + 1  # 跳过 TABLE- 标记行，从下一行开始是表头
+        
+        # 第一行是表头
+        if rr <= r_end:
+            header_vals = row_region_values(ws, rr, c1, c2, merge_idx)
+            # 过滤空值并去重（处理合并单元格）
+            # 跳过第一列（标记列），只收集后续列的表头
+            seen = set()
+            for idx, val in enumerate(header_vals):
+                if idx == 0:
+                    continue  # 跳过第一列（标记列）
+                # 跳过空值和重复值
+                if val and val not in seen:
+                    table_data["headers"].append(val)
+                    seen.add(val)
+            rr += 1
+        
+        # 后续行是数据
+        while rr <= r_end:
+            rv = row_region_values(ws, rr, c1, c2, merge_idx)
+            
+            # 检查第一列（标记列）是否有新的块级标记
+            # 注意：不检查 RULES-，因为表格可能在 RULES- 区域内部（合并单元格导致第一列是 RULES-）
+            first = rv[0] if rv else ""
+            if first and (first.startswith("TITLE-") or first.startswith("RINK-")):
+                break
+            
+            # 检查内容列是否有 TABLE- 结束标记
+            has_table_in_content = any(val.startswith("TABLE-") for val in rv[1:] if val)
+            if has_table_in_content:
+                break
+            
+            # 空行停止
+            if is_row_blank(rv):
+                break
+            
+            # 收集这一行的数据（跳过第一列标记列，只收集后续列）
+            row_data = []
+            seen = set()
+            
+            for col_idx, val in enumerate(rv):
+                # 跳过第一列（标记列）
+                if col_idx == 0:
+                    continue
+                
+                # 检测是否是图片标记（包含文件扩展名或 image: 前缀）
+                is_image = False
+                image_id = None
+                
+                if val:
+                    val_lower = val.lower()
+                    # 检测图片格式
+                    if any(ext in val_lower for ext in ['.png', '.jpg', '.jpeg', '.gif', '.webp']) or val_lower.startswith('image:'):
+                        is_image = True
+                        # 记录图片位置信息用于后续图片匹配
+                        image_id = val if not val_lower.startswith('image:') else val[6:].strip()
+                
+                # 即使是空值也要保留（可能是图片列），以保持列对齐
+                # 只去重非空的重复值
+                if val and val in seen:
+                    continue
+                
+                cell_data = {
+                    "value": val if val else "",
+                    "is_image": is_image,
+                    "_row": rr,
+                    "_col": c1 + col_idx,
+                    "_expected": image_id if is_image else None
+                }
+                row_data.append(cell_data)
+                
+                if val:
+                    seen.add(val)
+            
+            if row_data:
+                table_data["rows"].append(row_data)
+            
+            rr += 1
+        
+        # 将表格作为特殊的 section 添加
+        sections.append({
+            "title": "",
+            "content": "",
+            "rewards": [],
+            "table": table_data
+        })
+        
+        # 如果当前行的内容列包含 TABLE- 结束标记，跳过它
+        if rr <= r_end:
+            rv_check = row_region_values(ws, rr, c1, c2, merge_idx)
+            has_table_end = any(val.startswith("TABLE-") for val in rv_check[1:] if val)
+            if has_table_end:
+                rr += 1
+        
+        return rr
+
     def collect_rules_content(r0, section_title):
         """
         收集规则内容文本
@@ -163,13 +272,20 @@ def parse_section_block(ws, c1, c2, r_start, r_end, merge_idx):
         # 处理起始行及后续行
         while rr <= r_end:
             rv = row_region_values(ws, rr, c1, c2, merge_idx)
-            first = rv[0] if rv else ""
 
-            # 如果不是起始行，检查是否遇到TITLE或RINK标记或空行
+            # 如果不是起始行，检查是否遇到标记或空行
             # 注意：不检查RULES-，因为可能存在相同RULES标记的连续行需要合并
             if rr > r0:
-                if first.startswith("TITLE-") or first.startswith("RINK-"):
+                # 检查第一列（标记列）是否有新的块级标记
+                first = rv[0] if rv else ""
+                if first and (first.startswith("TITLE-") or first.startswith("RINK-")):
                     break
+                
+                # 检查内容列（rv[1:]）是否有 TABLE- 标记
+                has_table_in_content = any(val.startswith("TABLE-") for val in rv[1:] if val)
+                if has_table_in_content:
+                    break
+                
                 if is_row_blank(rv):
                     break
 
@@ -202,7 +318,16 @@ def parse_section_block(ws, c1, c2, r_start, r_end, merge_idx):
         if is_row_blank(rv):
             r += 1
             continue
-        first = rv[0]
+        
+        # 检查第一列（标记列）的标记类型
+        first = rv[0] if rv else ""
+        
+        # 检查内容列（rv[1:]）是否有 TABLE- 标记
+        has_table_in_content = any(val.startswith("TABLE-") for val in rv[1:] if val)
+        if has_table_in_content:
+            r = collect_table(r)
+            continue
+        
         if first.startswith("RULES-"):
             title = first.split("RULES-")[-1].strip()
             # 找到具有相同标题的所有连续行的结束位置
@@ -215,8 +340,8 @@ def parse_section_block(ws, c1, c2, r_start, r_end, merge_idx):
                 if is_row_blank(next_rv):
                     break
 
-                # 如果下一行是 TITLE 或 RINK 标记，停止
-                if next_first.startswith("TITLE-") or next_first.startswith("RINK-"):
+                # 如果下一行是 TITLE 或 RINK 或 TABLE 标记，停止
+                if next_first.startswith("TITLE-") or next_first.startswith("RINK-") or next_first.startswith("TABLE-"):
                     break
 
                 # 如果下一行也是 RULES 标记

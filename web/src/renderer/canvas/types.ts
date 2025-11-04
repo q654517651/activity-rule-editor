@@ -12,10 +12,25 @@ export type Reward = {
   desc?: string;
 };
 
+// 表格单元格数据
+export type TableCell = {
+  value: string;            // 单元格内容（文字或图片标识）
+  is_image: boolean;        // 是否为图片
+  image?: ImageMeta;        // 如果是图片，包含图片元数据
+};
+
+// 表格数据结构
+export type TableData = {
+  type: 'table';
+  headers: string[];        // 表头（文字）
+  rows: TableCell[][];      // 数据行（每行包含多个单元格）
+};
+
 export type Section = { 
   title?: string; 
   content?: string; 
   rewards?: Reward[];
+  table?: TableData;        // 新增：表格数据
   // 展平后保留的 block 元数据
   _blockType?: 'rules' | 'rewards';  // 块类型
   _blockTitle?: string;               // 块标题

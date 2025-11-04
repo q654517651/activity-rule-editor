@@ -4,6 +4,7 @@ import type Konva from 'konva';
 import type { Page, StyleCfg, Reward, Section } from './types';
 import { loadBitmap } from './useImageCache';
 import { NineSlice } from './nineSlice';
+import { TableComponent } from './TableComponent';
 // Konva Text 组件的 direction 属性类型已在 konva-extensions.d.ts 中扩展
 
 /**
@@ -297,6 +298,12 @@ export function PageCanvas({
       ? (measuredHeights.get(contentKey) || Math.ceil(style.font.size * style.font.lineHeight * 3)) // 初始估算3行
       : 0;
 
+    // section 表格区域高度 - 使用实际测量值或估算
+    const tableKey = `section-${sectionIdx}-table`;
+    const tableH = section.table
+      ? (measuredHeights.get(tableKey) || Math.ceil(style.font.size * 8 * (section.table.rows.length + 1))) // 初始估算：每行8倍字体大小（考虑图片和多行文本）
+      : 0;
+
     // section 奖励区域高度
     const rewards = section.rewards || [];
     const rewardRows = rewards.length > 0 ? Math.ceil(rewards.length / rewardColCount) : 0;
@@ -325,6 +332,7 @@ export function PageCanvas({
       (blockTitleH ? blockTitleH + gapH + 8 : 0) +  // block 标题 + 额外间距
       (titleH ? titleH + gapH : 0) +
       (contentH ? contentH + gapH : 0) +
+      (tableH ? tableH + gapH : 0) +                // 表格高度
       rewardsH;
 
     return {
@@ -332,6 +340,7 @@ export function PageCanvas({
       blockTitleH,
       titleH,
       contentH,
+      tableH,
       rewardsH,
       sectionH,
       rewards,
@@ -427,6 +436,9 @@ export function PageCanvas({
         const contentY = sectionCursorY;
         if (s.contentH) sectionCursorY += s.contentH + gapH;
 
+        const tableY = sectionCursorY;
+        if (s.tableH) sectionCursorY += s.tableH + gapH;
+
         const rewardsY = sectionCursorY;
 
         return (
@@ -491,6 +503,32 @@ export function PageCanvas({
                 lineHeight={style.font.lineHeight}
                 fill={style.contentColor}
                 direction={direction}
+              />
+            ) : null}
+
+            {/* Section 表格 */}
+            {s.section.table ? (
+              <TableComponent
+                table={s.section.table}
+                x={contentX}
+                y={tableY}
+                width={contentW}
+                fontSize={style.font.size}
+                fontFamily={style.font.family}
+                titleColor={style.titleColor}
+                contentColor={style.contentColor}
+                direction={direction}
+                onHeightMeasured={(h) => {
+                  const key = `section-${sectionIdx}-table`;
+                  setMeasuredHeights(prev => {
+                    if (prev.get(key) !== h) {
+                      const newMap = new Map(prev);
+                      newMap.set(key, h);
+                      return newMap;
+                    }
+                    return prev;
+                  });
+                }}
               />
             ) : null}
 
