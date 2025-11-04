@@ -19,6 +19,7 @@ export type Section = {
   // 展平后保留的 block 元数据
   _blockType?: 'rules' | 'rewards';  // 块类型
   _blockTitle?: string;               // 块标题
+  _isFirstInBlock?: boolean;          // 是否为 block 的第一个 section
 };
 
 // 新增：按 TITLE 分组的块结构
@@ -33,6 +34,7 @@ export type Page = {
   region?: string;
   blocks?: Block[];  // 新结构：块数组
   sections?: Section[];  // 旧结构：分段数组（向后兼容）
+  direction?: 'rtl' | 'ltr';  // 文本方向，支持 RTL（阿拉伯语等）和 LTR（默认）
 };
 
 export type Data = { pages: Page[] };

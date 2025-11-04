@@ -19,7 +19,8 @@ function defaultStyle(): StyleCfg {
   };
 }
 
-const API_BASE = 'http://127.0.0.1:8000';
+// 使用相对路径，开发时通过 Vite proxy 转发到后端，生产环境根据需要配置
+const API_BASE = import.meta.env.VITE_API_BASE || '';
 
 // 图片位图缓存
 const imageBitmapCache = new Map<string, ImageBitmap>();
@@ -108,7 +109,7 @@ const CanvasCell = memo(function CanvasCell({
     >
       {page.region && (
         <div className="text-sm font-semibold text-black mb-2">
-          页面{page.region}
+          {page.region}
         </div>
       )}
       <div

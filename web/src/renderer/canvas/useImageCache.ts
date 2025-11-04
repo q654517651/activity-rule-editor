@@ -7,8 +7,8 @@ function getApiBase(): string {
     const stored = localStorage.getItem('API_BASE');
     if (stored) return stored;
   }
-  // 默认值：假设 API 服务器在 127.0.0.1:8000
-  return 'http://127.0.0.1:8000';
+  // 使用相对路径，开发时通过 Vite proxy 转发，生产环境根据需要配置
+  return import.meta.env.VITE_API_BASE || '';
 }
 
 /**

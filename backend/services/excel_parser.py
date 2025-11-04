@@ -6,6 +6,22 @@ from typing import Dict, List, Tuple, Optional
 from openpyxl import load_workbook
 
 
+# RTL 地区列表（中东、阿拉伯语地区、希伯来语地区等）
+RTL_REGIONS = {'MECA', 'ARAB', 'ARABIC', 'SA', 'UAE', 'EG', 'IL', 'ISRAEL', 'JO', 'LB', 'IQ', 'SY'}
+
+
+def is_rtl_region(region_code: str) -> bool:
+    """
+    根据地区代码判断是否为 RTL（从右到左）语言
+    """
+    if not region_code:
+        return False
+    
+    upper_code = region_code.upper()
+    # 检查是否包含任何 RTL 地区标识
+    return any(rtl in upper_code for rtl in RTL_REGIONS)
+
+
 def clean_text(v) -> str:
     if v is None:
         return ""
@@ -305,16 +321,38 @@ def parse_sheet(ws) -> dict:
             else:
                 merged_secs = [{"title": title_text or title_type, "content": fallback, "rewards": []}]
 
-            # 根据 title_type 判断 block 类型
-            block_type = "rewards" if title_type.lower() in ["奖励", "reward"] else "rules"
+            # 智能判断 block 类型（基于内容和标题关键词）
+            # 1. 检查是否包含奖励数据
+            total_rewards = sum(len(sec.get("rewards", [])) for sec in merged_secs)
+            
+            # 2. 检查标题关键词
+            title_lower = title_type.lower()
+            reward_keywords = ["奖励", "reward", "榜", "排行", "排名", "leaderboard", "prize", "奖品"]
+            has_reward_keyword = any(kw in title_lower for kw in reward_keywords)
+            
+            # 3. 综合判断：有奖励数据 或 标题包含关键词
+            block_type = "rewards" if (total_rewards > 0 or has_reward_keyword) else "rules"
 
+            # 确定最终的标题文本，并去掉可能残留的 TITLE- 前缀
+            final_title = title_text or title_type
+            # 安全检查：去掉任何残留的 TITLE- 前缀（以防格式不标准）
+            if final_title.startswith("TITLE-"):
+                final_title = final_title.split("TITLE-", 1)[-1].strip()
+            
             blocks.append({
-                "block_title": title_text or title_type,
+                "block_title": final_title,
                 "block_type": block_type,
                 "sections": merged_secs
             })
 
-        pages.append({"region": region["code"], "blocks": blocks})
+        # 根据地区代码判断文本方向
+        direction = "rtl" if is_rtl_region(region["code"]) else "ltr"
+        
+        pages.append({
+            "region": region["code"],
+            "direction": direction,
+            "blocks": blocks
+        })
     return {"pages": pages}
 
 

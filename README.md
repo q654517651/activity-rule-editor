@@ -11,6 +11,7 @@
 - 📤 **批量导出**：支持多 sheet 分文件夹批量导出高分辨率 PNG 图片
 - 🌐 **Web 应用**：纯 Web 应用，无需安装客户端
 - 🔄 **智能切换**：左侧导航快速切换不同工作表
+- 🌍 **RTL 语言支持**：自动检测并正确渲染阿拉伯语、希伯来语等从右到左的语言
 
 ## 项目结构
 
@@ -105,8 +106,10 @@ Excel 文件使用特定的标记系统进行结构化：
 
 详细的开发指导和架构说明请查看：
 - [CLAUDE.md](CLAUDE.md) - AI 助手开发指南
-- [API_SETUP.md](API_SETUP.md) - API 配置与调试
-- [README_EXCEL_PARSING.md](README_EXCEL_PARSING.md) - Excel 解析逻辑详解
+- [API_SETUP.md](docs/API_SETUP.md) - API 配置与调试
+- [README_EXCEL_PARSING.md](docs/README_EXCEL_PARSING.md) - Excel 解析逻辑详解
+- [MULTI_SHEET_GUIDE.md](docs/MULTI_SHEET_GUIDE.md) - 多 Sheet 功能指南
+- [RTL_SUPPORT.md](docs/RTL_SUPPORT.md) - RTL 语言（阿拉伯语等）支持说明
 
 ## 构建与部署
 

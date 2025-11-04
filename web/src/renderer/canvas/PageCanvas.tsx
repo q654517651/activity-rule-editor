@@ -1,13 +1,16 @@
-import React, { useEffect, useMemo, useState, useRef, useCallback, useLayoutEffect } from 'react';
+import { useEffect, useMemo, useState, useRef, useCallback, useLayoutEffect } from 'react';
 import { Group, Image as KImage, Text, Rect } from 'react-konva';
+import type Konva from 'konva';
 import type { Page, StyleCfg, Reward, Section } from './types';
 import { loadBitmap } from './useImageCache';
 import { NineSlice } from './nineSlice';
-import { measurePlainTextHeight } from './text';
+// Konva Text 组件的 direction 属性类型已在 konva-extensions.d.ts 中扩展
 
 /**
  * 规范化页面数据：如果有 blocks，展平为 sections；如果有 sections，保持原样
  * 关键：展平时保留 block_type 信息，这样渲染时能区分规则和奖励
+ * 
+ * 在第一个 section 前插入 block title 作为大标题
  */
 function normalizePage(page: Page): Page {
   if (page.blocks && page.blocks.length > 0) {
@@ -17,11 +20,13 @@ function normalizePage(page: Page): Page {
     for (const block of page.blocks) {
       // 为块内的每个 section 添加 block 元数据
       if (block.sections && block.sections.length > 0) {
-        for (const section of block.sections) {
+        for (let i = 0; i < block.sections.length; i++) {
+          const section = block.sections[i];
           allSections.push({
             ...section,
-            _blockType: block.block_type,      // 保留块类型（rules/rewards）
-            _blockTitle: block.block_title,    // 保留块标题
+            _blockType: block.block_type,       // 保留块类型（rules/rewards）
+            _blockTitle: block.block_title,     // 保留块标题
+            _isFirstInBlock: i === 0,           // 标记是否为 block 的第一个 section
           });
         }
       }
@@ -39,7 +44,7 @@ function normalizePage(page: Page): Page {
 
 /**
  * 奖励项组件 - 图片在上（160x160），文字在下（标题 + 描述）
- * 返回组件实际占用的高度
+ * 使用实际渲染高度而非预测
  */
 function RewardItem({
   reward,
@@ -47,6 +52,7 @@ function RewardItem({
   y,
   width,
   style,
+  direction = 'ltr',
   onHeightMeasured,
 }: {
   reward: Reward;
@@ -54,9 +60,12 @@ function RewardItem({
   y: number;
   width: number;
   style: StyleCfg;
+  direction?: 'rtl' | 'ltr';
   onHeightMeasured?: (h: number) => void;
 }) {
   const [rewardImg, setRewardImg] = useState<CanvasImageSource | null>(null);
+  const nameRef = useRef<Konva.Text>(null);
+  const descRef = useRef<Konva.Text>(null);
 
   useEffect(() => {
     if (!reward.image) {
@@ -79,10 +88,33 @@ function RewardItem({
     })();
   }, [reward.image]);
 
+  // 测量实际渲染高度
+  useLayoutEffect(() => {
+    const imgBoxH = 160 + 8;
+    const textGapV = 4;
+    
+    let nameH = 0;
+    let descH = 0;
+
+    if (nameRef.current && reward.name) {
+      nameH = nameRef.current.height();
+    }
+    
+    if (descRef.current && reward.desc) {
+      descH = descRef.current.height();
+    }
+
+    const totalH = imgBoxH + (nameH ? nameH + textGapV : 0) + (descH ? descH + textGapV : 0);
+    
+    if (onHeightMeasured && totalH > 0) {
+      onHeightMeasured(totalH);
+    }
+  }, [reward.name, reward.desc, width, onHeightMeasured]);
+
   // 图片尺寸（保持正方形容器，内部图片长边贴边）
   const imgBoxSize = 160;
   const imgPadding = 4;
-  const imgBoxH = imgBoxSize + imgPadding * 2; // 图片容器总高度
+  const imgBoxH = imgBoxSize + imgPadding * 2;
 
   // 计算图片的实际尺寸（长边贴边，保持比例）
   let displayImgW = imgBoxSize;
@@ -95,48 +127,23 @@ function RewardItem({
     const originalH = (rewardImg as any).height || 1;
     const aspectRatio = originalW / originalH;
 
-    // 长边贴边：宽图填满宽度，高图填满高度
     if (aspectRatio > 1) {
-      // 横向图片：宽度填满，高度按比例
       displayImgW = imgBoxSize;
       displayImgH = imgBoxSize / aspectRatio;
-      imgOffsetY = (imgBoxSize - displayImgH) / 2; // 垂直居中
+      imgOffsetY = (imgBoxSize - displayImgH) / 2;
     } else {
-      // 纵向图片：高度填满，宽度按比例
       displayImgH = imgBoxSize;
       displayImgW = imgBoxSize * aspectRatio;
-      imgOffsetX = (imgBoxSize - displayImgW) / 2; // 水平居中
+      imgOffsetX = (imgBoxSize - displayImgW) / 2;
     }
   }
 
   // 文字区域
   const textStartY = imgBoxH + 4;
   const textGapV = 4;
-
-  // 标题高度
-  const nameH = reward.name
-    ? Math.ceil(style.font.size * style.font.lineHeight)
-    : 0;
-
-  // 描述高度（动态测量）
-  const descH = reward.desc && width > 0
-    ? measurePlainTextHeight({
-        text: reward.desc,
-        width: width,
-        fontSize: style.font.size - 2,
-        lineHeight: style.font.lineHeight,
-        fontFamily: style.font.family,
-      })
-    : 0;
-
-  // 总高度
-  const totalH = imgBoxH + (nameH ? nameH + textGapV : 0) + (descH ? descH + textGapV : 0);
-
-  useEffect(() => {
-    if (onHeightMeasured) {
-      onHeightMeasured(totalH);
-    }
-  }, [totalH, onHeightMeasured]);
+  
+  // 获取实际渲染高度（通过 ref）
+  const nameH = nameRef.current ? nameRef.current.height() : 0;
 
   return (
     <Group x={x} y={y}>
@@ -154,6 +161,7 @@ function RewardItem({
       {/* 奖励名称（标题，加粗，在列宽内水平居中） */}
       {reward.name && (
         <Text
+          ref={nameRef}
           text={reward.name}
           x={0}
           y={textStartY}
@@ -163,12 +171,14 @@ function RewardItem({
           fontFamily={style.font.family}
           fill={style.titleColor}
           fontStyle="bold"
+          direction={direction}
         />
       )}
 
-      {/* 奖励描述 - 在列宽内水平居中 */}
+      {/* 奖励描述 - 居中对齐，与图片和标题保持一致 */}
       {reward.desc ? (
         <Text
+          ref={descRef}
           text={reward.desc}
           x={0}
           y={textStartY + nameH + textGapV}
@@ -178,6 +188,7 @@ function RewardItem({
           fontFamily={style.font.family}
           fill={style.contentColor}
           lineHeight={style.font.lineHeight}
+          direction={direction}
         />
       ) : null}
     </Group>
@@ -198,9 +209,21 @@ export function PageCanvas({
   // 规范化页面数据：支持新旧两种结构
   const normalizedPage = useMemo(() => normalizePage(page), [page]);
 
+  // 直接使用后端提供的文本方向（基于地区代码）
+  const direction = page.direction || 'ltr';
+  
+  // 根据方向获取文本对齐方式
+  const textAlign = direction === 'rtl' ? 'right' : 'left';
+
   const W = style.pageWidth;
   const PAD = style.pad;
   const [borderBmp, setBorderBmp] = useState<CanvasImageSource | null>(null);
+  
+  // 存储每个section文本的实际渲染高度
+  const [measuredHeights, setMeasuredHeights] = useState<Map<string, number>>(new Map());
+  
+  // 存储 Text 组件的 ref
+  const textRefs = useRef<Map<string, Konva.Text>>(new Map());
 
   useEffect(() => {
     (async () => {
@@ -210,6 +233,28 @@ export function PageCanvas({
     })();
   }, [style.border.image]);
 
+  // 测量所有文本的实际渲染高度
+  useLayoutEffect(() => {
+    const newHeights = new Map<string, number>();
+    let hasChanges = false;
+
+    textRefs.current.forEach((textNode, key) => {
+      if (textNode) {
+        const height = textNode.height();
+        if (height > 0) {
+          newHeights.set(key, height);
+          if (!measuredHeights.has(key) || measuredHeights.get(key) !== height) {
+            hasChanges = true;
+          }
+        }
+      }
+    });
+
+    if (hasChanges) {
+      setMeasuredHeights(newHeights);
+    }
+  });
+
   // 确保所有数值有效，防止 NaN
   const contentX = isFinite(PAD.l) ? PAD.l : 0;
   const contentY = isFinite(PAD.t) ? PAD.t : 0;
@@ -218,7 +263,8 @@ export function PageCanvas({
   // 布局：各个 section（每个 section 包含标题、内容、奖励）
   // 页面标题已移至 Canvas 外部，不再在此渲染
   const gapH = 12;
-  const sectionGap = 20; // section 之间的间距
+  const sectionGap = 20; // 同一 block 内 section 之间的间距
+  const blockGap = 48; // 不同 block 之间的间距
 
   // 奖励网格配置
   const rewardColCount = 3; // 一排3个奖励
@@ -229,31 +275,33 @@ export function PageCanvas({
     : 0;
 
   // 存储每行奖励的最大高度
-  const rewardRowHeights: Record<number, number> = {};
+  const rewardRowHeights: Record<string, number> = {};
 
   // 计算每个 section 的高度和布局信息
   const sections = (normalizedPage.sections || []).map((section, sectionIdx) => {
-    // section 标题高度（如果有）
+    // block 标题高度（如果是 block 的第一个 section）
+    const blockTitleKey = `section-${sectionIdx}-blocktitle`;
+    const blockTitleH = (section._isFirstInBlock && section._blockTitle)
+      ? (measuredHeights.get(blockTitleKey) || Math.ceil((style.font.size + 4) * style.font.lineHeight))
+      : 0;
+    
+    // section 标题高度 - 使用实际测量值或估算
+    const titleKey = `section-${sectionIdx}-title`;
     const titleH = section.title
-      ? Math.ceil(style.font.size * style.font.lineHeight)
+      ? (measuredHeights.get(titleKey) || Math.ceil(style.font.size * style.font.lineHeight))
       : 0;
 
-    // section 内容高度
+    // section 内容高度 - 使用实际测量值或估算
+    const contentKey = `section-${sectionIdx}-content`;
     const contentH = section.content && contentW > 0
-      ? measurePlainTextHeight({
-          text: section.content,
-          width: contentW,
-          fontSize: style.font.size,
-          lineHeight: style.font.lineHeight,
-          fontFamily: style.font.family,
-        })
+      ? (measuredHeights.get(contentKey) || Math.ceil(style.font.size * style.font.lineHeight * 3)) // 初始估算3行
       : 0;
 
-    // section 奖励区域高度（需要预测）
+    // section 奖励区域高度
     const rewards = section.rewards || [];
     const rewardRows = rewards.length > 0 ? Math.ceil(rewards.length / rewardColCount) : 0;
 
-    // 预测每行的最大高度（基于最坏情况：每个奖励都有长描述）
+    // 计算每行的最大高度（使用实际测量值）
     let rewardsH = 0;
     for (let row = 0; row < rewardRows; row++) {
       const rowStartIdx = row * rewardColCount;
@@ -261,18 +309,9 @@ export function PageCanvas({
       let maxRowH = 0;
 
       for (let i = rowStartIdx; i < rowEndIdx; i++) {
-        const r = rewards[i];
-        const nameH = r.name ? Math.ceil(style.font.size * style.font.lineHeight) : 0;
-        const descH = r.desc && rewardColW > 0
-          ? measurePlainTextHeight({
-              text: r.desc,
-              width: rewardColW,
-              fontSize: style.font.size - 2,
-              lineHeight: style.font.lineHeight,
-              fontFamily: style.font.family,
-            })
-          : 0;
-        const itemH = 160 + 8 + (nameH ? nameH + 4 : 0) + (descH ? descH + 4 : 0);
+        const rewardKey = `section-${sectionIdx}-reward-${i}`;
+        // 使用实际测量高度，如果没有则使用估算值（168 = 图片160 + padding8）
+        const itemH = measuredHeights.get(rewardKey) || 250; // 估算：图片 + 文本
         maxRowH = Math.max(maxRowH, itemH);
       }
 
@@ -281,14 +320,16 @@ export function PageCanvas({
       if (row < rewardRows - 1) rewardsH += rewardGapH;
     }
 
-    // section 总高度
+    // section 总高度（包含 block 标题）
     const sectionH =
+      (blockTitleH ? blockTitleH + gapH + 8 : 0) +  // block 标题 + 额外间距
       (titleH ? titleH + gapH : 0) +
       (contentH ? contentH + gapH : 0) +
       rewardsH;
 
     return {
       section,
+      blockTitleH,
       titleH,
       contentH,
       rewardsH,
@@ -298,9 +339,12 @@ export function PageCanvas({
     };
   });
 
-  // 计算总高度
+  // 计算总高度（考虑 block 之间的间距）
   const sectionsH = sections.reduce((sum, s, i) => {
-    return sum + s.sectionH + (i > 0 ? sectionGap : 0);
+    if (i === 0) return sum + s.sectionH;
+    // 如果是新 block 的第一个 section，使用 blockGap，否则使用 sectionGap
+    const gap = s.section._isFirstInBlock ? blockGap : sectionGap;
+    return sum + s.sectionH + gap;
   }, 0);
 
   // 页面标题已移至 Canvas 外部，不再计入高度
@@ -338,10 +382,17 @@ export function PageCanvas({
   // 页面标题已移至 Canvas 外部，从 contentY 直接开始
   let currentY = contentY;
 
-  // 为每个 section 计算 Y 坐标
+  // 为每个 section 计算 Y 坐标（考虑 block 之间的间距）
   const sectionsWithPos = sections.map((s, i) => {
     const sectionY = currentY;
-    currentY += s.sectionH + (i < sections.length - 1 ? sectionGap : 0);
+    if (i < sections.length - 1) {
+      // 如果下一个 section 是新 block 的第一个，使用 blockGap
+      const nextSection = sections[i + 1];
+      const gap = nextSection.section._isFirstInBlock ? blockGap : sectionGap;
+      currentY += s.sectionH + gap;
+    } else {
+      currentY += s.sectionH;
+    }
     return { ...s, y: sectionY };
   });
 
@@ -365,6 +416,11 @@ export function PageCanvas({
       {sectionsWithPos.map((s, sectionIdx) => {
         // 计算此 section 内部的 Y 坐标
         let sectionCursorY = s.y;
+        
+        // Block 标题（如果是block的第一个section）
+        const blockTitleY = sectionCursorY;
+        if (s.blockTitleH) sectionCursorY += s.blockTitleH + gapH + 8;
+        
         const titleY = sectionCursorY;
         if (s.titleH) sectionCursorY += s.titleH + gapH;
 
@@ -375,9 +431,35 @@ export function PageCanvas({
 
         return (
           <Group key={sectionIdx}>
+            {/* Block 标题 - 大标题，稍大字号，水平居中 */}
+            {s.section._isFirstInBlock && s.section._blockTitle ? (
+              <Text
+                ref={(node) => {
+                  if (node) {
+                    textRefs.current.set(`section-${sectionIdx}-blocktitle`, node);
+                  }
+                }}
+                text={s.section._blockTitle}
+                x={contentX}
+                y={blockTitleY}
+                width={contentW}
+                align="center"
+                fontSize={style.font.size + 4}
+                fontFamily={style.font.family}
+                fill={style.titleColor}
+                fontStyle="bold"
+                direction={direction}
+              />
+            ) : null}
+            
             {/* Section 标题 - 水平居中 */}
             {s.section.title ? (
               <Text
+                ref={(node) => {
+                  if (node) {
+                    textRefs.current.set(`section-${sectionIdx}-title`, node);
+                  }
+                }}
                 text={s.section.title}
                 x={contentX}
                 y={titleY}
@@ -387,20 +469,28 @@ export function PageCanvas({
                 fontFamily={style.font.family}
                 fill={style.titleColor}
                 fontStyle="bold"
+                direction={direction}
               />
             ) : null}
 
             {/* Section 内容 */}
             {s.section.content ? (
               <Text
+                ref={(node) => {
+                  if (node) {
+                    textRefs.current.set(`section-${sectionIdx}-content`, node);
+                  }
+                }}
                 text={s.section.content}
                 x={contentX}
                 y={contentY}
                 width={contentW}
+                align={textAlign}
                 fontSize={style.font.size}
                 fontFamily={style.font.family}
                 lineHeight={style.font.lineHeight}
                 fill={style.contentColor}
+                direction={direction}
               />
             ) : null}
 
@@ -413,7 +503,7 @@ export function PageCanvas({
                   const rowItemCount = rowEndIdx - rowStartIdx;
 
                   // 计算该行的最大高度
-                  const rowH = rewardRowHeights[`${sectionIdx}-${row}`] || 0;
+                  // const rowH = rewardRowHeights[`${sectionIdx}-${row}`] || 0;
 
                   // 计算该行的 Y 坐标
                   let rowY = rewardsY;
@@ -431,7 +521,9 @@ export function PageCanvas({
 
                   return Array.from({ length: rowItemCount }).map((_, colInRow) => {
                     const rewardIdx = rowStartIdx + colInRow;
-                    const x = rowStartX + colInRow * (rewardColW + rewardGutterX);
+                    // RTL 模式下从右到左排列，LTR 模式下从左到右排列
+                    const colPos = direction === 'rtl' ? (rowItemCount - 1 - colInRow) : colInRow;
+                    const x = rowStartX + colPos * (rewardColW + rewardGutterX);
                     const y = rowY;
 
                     if (!isFinite(x) || !isFinite(y)) return null;
@@ -444,6 +536,18 @@ export function PageCanvas({
                         y={y}
                         width={rewardColW}
                         style={style}
+                        direction={direction}
+                        onHeightMeasured={(h) => {
+                          const key = `section-${sectionIdx}-reward-${rewardIdx}`;
+                          setMeasuredHeights(prev => {
+                            if (prev.get(key) !== h) {
+                              const newMap = new Map(prev);
+                              newMap.set(key, h);
+                              return newMap;
+                            }
+                            return prev;
+                          });
+                        }}
                       />
                     );
                   });

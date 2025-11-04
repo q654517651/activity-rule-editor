@@ -7,4 +7,17 @@ import tailwindcss from "@tailwindcss/vite";
 export default defineConfig({
   base: './',
   plugins: [react(), tsconfigPaths(), tailwindcss()],
+  server: {
+    allowedHosts: [".ngrok-free.dev", ".ngrok.io", ".ngrok.app"],
+    proxy: {
+      '/api': {
+        target: 'http://127.0.0.1:8000',
+        changeOrigin: true,
+      },
+      '/media': {
+        target: 'http://127.0.0.1:8000',
+        changeOrigin: true,
+      }
+    }
+  }
 });
