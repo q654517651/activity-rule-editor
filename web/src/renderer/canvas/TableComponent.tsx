@@ -79,6 +79,7 @@ export function TableComponent({
   useLayoutEffect(() => {
     const newHeights = new Map<string, number>();
     let hasChanges = false;
+    let hasUnmeasured = false;
     
     // 测量文本节点
     textRefs.current.forEach((textNode, key) => {
@@ -89,6 +90,9 @@ export function TableComponent({
           if (!cellHeights.has(key) || cellHeights.get(key) !== height) {
             hasChanges = true;
           }
+        } else {
+          // 高度为 0，标记为未完成测量
+          hasUnmeasured = true;
         }
       }
     });
@@ -102,6 +106,8 @@ export function TableComponent({
           if (!cellHeights.has(key) || cellHeights.get(key) !== height) {
             hasChanges = true;
           }
+        } else {
+          hasUnmeasured = true;
         }
       }
     });
@@ -109,18 +115,43 @@ export function TableComponent({
     if (hasChanges) {
       setCellHeights(newHeights);
     }
+    
+    // 如果有未测量的节点，100ms 后重试
+    if (hasUnmeasured) {
+      const timer = setTimeout(() => {
+        setCellHeights(prev => new Map(prev)); // 强制触发重新渲染
+      }, 100);
+      return () => clearTimeout(timer);
+    }
   });
   
-  // 计算每行的最大高度
-  const getRowHeight = (rowIdx: number) => {
+  // 计算表头高度（表头单独计算）
+  const getHeaderHeight = () => {
     let maxHeight = minRowHeight;
     
-    // 遍历该行的所有列
     for (let colIdx = 0; colIdx < colCount; colIdx++) {
-      const key = `${rowIdx}-${colIdx}`;
+      const key = `-1-${colIdx}`;
       const cellHeight = cellHeights.get(key);
       if (cellHeight && cellHeight > maxHeight) {
         maxHeight = cellHeight;
+      }
+    }
+    
+    return maxHeight + cellPadding * 2;
+  };
+  
+  // 计算所有数据行的统一高度（找出整个表格中最高的单元格）
+  const getUnifiedDataRowHeight = () => {
+    let maxHeight = minRowHeight;
+    
+    // 遍历所有数据行的所有单元格，找出最大高度
+    for (let rowIdx = 0; rowIdx < table.rows.length; rowIdx++) {
+      for (let colIdx = 0; colIdx < colCount; colIdx++) {
+        const key = `${rowIdx}-${colIdx}`;
+        const cellHeight = cellHeights.get(key);
+        if (cellHeight && cellHeight > maxHeight) {
+          maxHeight = cellHeight;
+        }
       }
     }
     
@@ -128,17 +159,16 @@ export function TableComponent({
     return maxHeight + cellPadding * 2;
   };
   
-  // 计算表头高度
-  const headerHeight = getRowHeight(-1); // 用 -1 表示表头行
+  const headerHeight = getHeaderHeight();
+  const unifiedDataRowHeight = getUnifiedDataRowHeight(); // 所有数据行使用同一个统一高度
   
-  // 计算每个数据行的 Y 坐标和高度
+  // 计算每个数据行的 Y 坐标（所有行使用统一高度）
   const rowPositions: Array<{ y: number; height: number }> = [];
   let currentY = headerHeight;
   
   for (let rowIdx = 0; rowIdx < table.rows.length; rowIdx++) {
-    const rowH = getRowHeight(rowIdx);
-    rowPositions.push({ y: currentY, height: rowH });
-    currentY += rowH;
+    rowPositions.push({ y: currentY, height: unifiedDataRowHeight });
+    currentY += unifiedDataRowHeight;
   }
   
   const totalHeight = currentY;
@@ -229,16 +259,18 @@ export function TableComponent({
         if (!pos) return null;
         
         const { y: rowY, height: rowH } = pos;
+        const isLastRow = rowIdx === table.rows.length - 1;
         
         return (
           <Group key={`row-${rowIdx}`}>
-            {/* 数据行背景 */}
+            {/* 数据行背景 - 最后一行添加下方圆角 */}
             <Rect
               x={0}
               y={rowY}
               width={width}
               height={rowH}
               fill="rgba(255, 255, 255, 0.1)"
+              cornerRadius={isLastRow ? [0, 0, cornerRadius, cornerRadius] : 0}
             />
             
             {/* 数据单元格内容 */}
@@ -324,12 +356,14 @@ export function TableComponent({
               );
             })}
             
-            {/* 数据行底部分割线 */}
-            <Line
-              points={[0, rowY + rowH, width, rowY + rowH]}
-              stroke="rgba(0, 0, 0, 0.3)"
-              strokeWidth={1}
-            />
+            {/* 数据行底部分割线 - 最后一行不显示底部线 */}
+            {!isLastRow && (
+              <Line
+                points={[0, rowY + rowH, width, rowY + rowH]}
+                stroke="rgba(0, 0, 0, 0.3)"
+                strokeWidth={1}
+              />
+            )}
             
             {/* 数据行列分割线 */}
             {row.map((_, colIdx) => {
@@ -349,30 +383,6 @@ export function TableComponent({
           </Group>
         );
       })}
-      
-      {/* 左右边框 */}
-      <Line
-        points={[0, 0, 0, totalHeight]}
-        stroke="rgba(0, 0, 0, 0.3)"
-        strokeWidth={1}
-      />
-      <Line
-        points={[width, 0, width, totalHeight]}
-        stroke="rgba(0, 0, 0, 0.3)"
-        strokeWidth={1}
-      />
-      
-      {/* 四角圆角遮罩（使用透明 Rect 绘制圆角边框） */}
-      <Rect
-        x={0}
-        y={0}
-        width={width}
-        height={totalHeight}
-        stroke="rgba(0, 0, 0, 0.3)"
-        strokeWidth={1}
-        cornerRadius={cornerRadius}
-        listening={false}
-      />
     </Group>
   );
 }

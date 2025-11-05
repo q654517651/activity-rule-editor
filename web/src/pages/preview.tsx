@@ -454,16 +454,19 @@ export default function PreviewPage() {
     // 变化小于 5px 视为相同，避免抖动
     if (prev != null && Math.abs(prev - h) < 5) return;
 
+    // 立即更新 ref，确保即使 RAF 被取消也不丢失数据
+    // 这解决了快速滚动时页面卸载导致高度更新丢失的问题
+    const updatedHeights = heightsRef.current.slice();
+    updatedHeights[idx] = h;
+    heightsRef.current = updatedHeights;
+
     pendingRef.current.set(idx, h);
 
     if (rafRefHeights.current == null) {
       rafRefHeights.current = requestAnimationFrame(() => {
-        setHeights((arr) => {
-          const next = arr.slice();
-          for (const [i, v] of pendingRef.current) next[i] = v;
-          pendingRef.current.clear();
-          return next;
-        });
+        // 直接使用最新的 ref 数据，避免闭包陷阱
+        setHeights(heightsRef.current);
+        pendingRef.current.clear();
         rafRefHeights.current = null;
       });
     }

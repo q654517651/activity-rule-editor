@@ -8,7 +8,7 @@ export default defineConfig({
   base: './',
   plugins: [react(), tsconfigPaths(), tailwindcss()],
   server: {
-    allowedHosts: [".ngrok-free.dev", ".ngrok.io", ".ngrok.app"],
+    allowedHosts: [".ngrok-free.dev", ".ngrok.io", ".ngrok.app", ".trycloudflare.com"],
     proxy: {
       '/api': {
         target: 'http://127.0.0.1:8000',

@@ -7,19 +7,66 @@ import { PageCanvas } from './PageCanvas';
 
 function OffscreenExporter({ page, style, pixelRatio, onDone }: { page: Page; style: StyleCfg; pixelRatio: number; onDone: (dataUrl: string) => void }) {
   const stageRef = useRef<any>(null);
-  const [h, setH] = useState(style.pad.t + style.font.size * 10 + style.pad.b);
+  // 使用较大的初始值，确保内容不被裁剪
+  const [h, setH] = useState(2400);
+  
+  // 追踪高度稳定性
+  const prevHRef = useRef(h);
+  const stableCountRef = useRef(0);
+  const hasExportedRef = useRef(false);
+
   useEffect(() => {
-    // two frames to ensure draw finished
-    const id = requestAnimationFrame(() => requestAnimationFrame(() => {
-      try {
-        const dataUrl = stageRef.current?.toDataURL({ pixelRatio }) || '';
-        onDone(dataUrl);
-      } catch {
-        onDone('');
+    // 如果已经导出过，不再重复
+    if (hasExportedRef.current) return;
+
+    // 检查高度是否稳定（连续 3 次测量值变化小于 1px）
+    if (Math.abs(prevHRef.current - h) < 1) {
+      stableCountRef.current++;
+    } else {
+      stableCountRef.current = 0;
+      prevHRef.current = h;
+      return; // 高度还在变化，继续等待
+    }
+
+    // 高度已稳定（连续 3 次相同），且已完成测量（不是初始值）
+    if (stableCountRef.current >= 3 && h !== 2400) {
+      hasExportedRef.current = true;
+      
+      // 等待 3 帧确保所有内容都已渲染完成
+      const id1 = requestAnimationFrame(() => {
+        const id2 = requestAnimationFrame(() => {
+          const id3 = requestAnimationFrame(() => {
+            try {
+              const dataUrl = stageRef.current?.toDataURL({ pixelRatio }) || '';
+              onDone(dataUrl);
+            } catch (e) {
+              console.error('导出失败:', e);
+              onDone('');
+            }
+          });
+        });
+      });
+      
+      return () => cancelAnimationFrame(id1);
+    }
+    
+    // 超时保护：5 秒后仍未稳定，强制使用当前高度导出
+    const timeout = setTimeout(() => {
+      if (!hasExportedRef.current) {
+        console.warn('高度测量超时，使用当前高度导出:', h);
+        hasExportedRef.current = true;
+        try {
+          const dataUrl = stageRef.current?.toDataURL({ pixelRatio }) || '';
+          onDone(dataUrl);
+        } catch (e) {
+          console.error('导出失败:', e);
+          onDone('');
+        }
       }
-    }));
-    return () => cancelAnimationFrame(id);
-  }, [h, page, style, pixelRatio, onDone]);
+    }, 5000);
+    
+    return () => clearTimeout(timeout);
+  }, [h, pixelRatio, onDone]);
 
   return (
     <Stage ref={stageRef} width={style.pageWidth} height={h}>

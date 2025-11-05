@@ -40,22 +40,26 @@ export function NineSlice({
   const mw = Math.max(0, w - sliceL - sliceR);
   const mh = Math.max(0, h - sliceT - sliceB);
 
+  // 添加微小的重叠（1px）来消除亚像素渲染导致的白线
+  // 这在预览时缩放（50%、75%等）会特别明显，导出时使用整数倍缩放则不明显
+  const overlap = 1;
+
   return (
     <Group x={x} y={y}>
-      {/* 四个角 */}
-      <KImage image={bmp as any} x={0} y={0} width={sliceL} height={sliceT} crop={{ x: 0, y: 0, width: sliceL, height: sliceT }} />
-      <KImage image={bmp as any} x={w - sliceR} y={0} width={sliceR} height={sliceT} crop={{ x: sw - sliceR, y: 0, width: sliceR, height: sliceT }} />
-      <KImage image={bmp as any} x={0} y={h - sliceB} width={sliceL} height={sliceB} crop={{ x: 0, y: sh - sliceB, width: sliceL, height: sliceB }} />
-      <KImage image={bmp as any} x={w - sliceR} y={h - sliceB} width={sliceR} height={sliceB} crop={{ x: sw - sliceR, y: sh - sliceB, width: sliceR, height: sliceB }} />
+      {/* 四个角 - 添加重叠 */}
+      <KImage image={bmp as any} x={0} y={0} width={sliceL + overlap} height={sliceT + overlap} crop={{ x: 0, y: 0, width: sliceL, height: sliceT }} />
+      <KImage image={bmp as any} x={w - sliceR - overlap} y={0} width={sliceR + overlap} height={sliceT + overlap} crop={{ x: sw - sliceR, y: 0, width: sliceR, height: sliceT }} />
+      <KImage image={bmp as any} x={0} y={h - sliceB - overlap} width={sliceL + overlap} height={sliceB + overlap} crop={{ x: 0, y: sh - sliceB, width: sliceL, height: sliceB }} />
+      <KImage image={bmp as any} x={w - sliceR - overlap} y={h - sliceB - overlap} width={sliceR + overlap} height={sliceB + overlap} crop={{ x: sw - sliceR, y: sh - sliceB, width: sliceR, height: sliceB }} />
 
-      {/* 四条边 */}
-      <KImage image={bmp as any} x={sliceL} y={0} width={mw} height={sliceT} crop={{ x: sliceL, y: 0, width: cw, height: sliceT }} />
-      <KImage image={bmp as any} x={sliceL} y={h - sliceB} width={mw} height={sliceB} crop={{ x: sliceL, y: sh - sliceB, width: cw, height: sliceB }} />
-      <KImage image={bmp as any} x={0} y={sliceT} width={sliceL} height={mh} crop={{ x: 0, y: sliceT, width: sliceL, height: ch }} />
-      <KImage image={bmp as any} x={w - sliceR} y={sliceT} width={sliceR} height={mh} crop={{ x: sw - sliceR, y: sliceT, width: sliceR, height: ch }} />
+      {/* 四条边 - 添加重叠 */}
+      <KImage image={bmp as any} x={sliceL - overlap} y={0} width={mw + overlap * 2} height={sliceT + overlap} crop={{ x: sliceL, y: 0, width: cw, height: sliceT }} />
+      <KImage image={bmp as any} x={sliceL - overlap} y={h - sliceB - overlap} width={mw + overlap * 2} height={sliceB + overlap} crop={{ x: sliceL, y: sh - sliceB, width: cw, height: sliceB }} />
+      <KImage image={bmp as any} x={0} y={sliceT - overlap} width={sliceL + overlap} height={mh + overlap * 2} crop={{ x: 0, y: sliceT, width: sliceL, height: ch }} />
+      <KImage image={bmp as any} x={w - sliceR - overlap} y={sliceT - overlap} width={sliceR + overlap} height={mh + overlap * 2} crop={{ x: sw - sliceR, y: sliceT, width: sliceR, height: ch }} />
 
-      {/* 中间填充 */}
-      <KImage image={bmp as any} x={sliceL} y={sliceT} width={mw} height={mh} crop={{ x: sliceL, y: sliceT, width: cw, height: ch }} />
+      {/* 中间填充 - 添加重叠 */}
+      <KImage image={bmp as any} x={sliceL - overlap} y={sliceT - overlap} width={mw + overlap * 2} height={mh + overlap * 2} crop={{ x: sliceL, y: sliceT, width: cw, height: ch }} />
     </Group>
   );
 }
