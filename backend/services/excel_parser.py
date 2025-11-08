@@ -45,15 +45,58 @@ def build_merge_index(ws) -> Dict[Tuple[int, int], Tuple[int, int, int, int]]:
     return idx
 
 
-def get_value(ws, r: int, c: int, merge_idx):
+def get_cell_info(ws, r: int, c: int, merge_idx):
+    """获取单元格的值和格式信息（加粗、对齐等）"""
     if (r, c) in merge_idx:
         r0, c0, _, _ = merge_idx[(r, c)]
-        return ws.cell(r0, c0).value
-    return ws.cell(r, c).value
+        cell = ws.cell(r0, c0)
+    else:
+        cell = ws.cell(r, c)
+    
+    # 读取单元格的值
+    value = cell.value
+    
+    # 检查是否为百分比格式
+    if isinstance(value, (int, float)) and cell.number_format:
+        # 如果数字格式包含百分号，转换为百分比显示
+        if '%' in cell.number_format:
+            # 将小数转换为百分比（0.5 → 50%）
+            value = f"{value * 100:.10g}%"
+    
+    # 读取对齐信息
+    is_center = False
+    if cell.alignment and cell.alignment.horizontal:
+        # 检查是否为居中对齐
+        is_center = cell.alignment.horizontal == 'center'
+    
+    return {
+        'value': value,
+        'bold': cell.font.bold if cell.font and cell.font.bold else False,
+        'center': is_center
+    }
+
+
+def get_value(ws, r: int, c: int, merge_idx):
+    """获取单元格的值（仅文本，不含格式）"""
+    info = get_cell_info(ws, r, c, merge_idx)
+    return info['value']
 
 
 def row_region_values(ws, r: int, c1: int, c2: int, merge_idx):
     return [clean_text(get_value(ws, r, c, merge_idx)) for c in range(c1, c2 + 1)]
+
+
+def row_region_values_with_format(ws, r: int, c1: int, c2: int, merge_idx):
+    """获取一行的值和格式信息"""
+    result = []
+    for c in range(c1, c2 + 1):
+        info = get_cell_info(ws, r, c, merge_idx)
+        result.append({
+            'value': clean_text(info['value']),
+            'bold': info['bold'],
+            'center': info['center']
+        })
+    return result
 
 
 def is_row_blank(vals: List[str]) -> bool:
@@ -118,7 +161,7 @@ def parse_section_block(ws, c1, c2, r_start, r_end, merge_idx):
             rv = row_region_values(ws, rr, c1, c2, merge_idx)
             first = rv[0] if rv else ""
             # stop if next block begins (but allow first line)
-            if first.startswith("TITLE-") or first.startswith("RINK-") or first.startswith("RULES-") or first.startswith("TABLE-"):
+            if first.startswith("TITLE-") or first.startswith("RINK-") or first.startswith("RANK-") or first.startswith("RULES-") or first.startswith("TABLE-"):
                 if rr != r0:
                     break
             if is_row_blank(rv):
@@ -184,7 +227,7 @@ def parse_section_block(ws, c1, c2, r_start, r_end, merge_idx):
             # 检查第一列（标记列）是否有新的块级标记
             # 注意：不检查 RULES-，因为表格可能在 RULES- 区域内部（合并单元格导致第一列是 RULES-）
             first = rv[0] if rv else ""
-            if first and (first.startswith("TITLE-") or first.startswith("RINK-")):
+            if first and (first.startswith("TITLE-") or first.startswith("RINK-") or first.startswith("RANK-")):
                 break
             
             # 检查内容列是否有 TABLE- 结束标记
@@ -271,14 +314,16 @@ def parse_section_block(ws, c1, c2, r_start, r_end, merge_idx):
 
         # 处理起始行及后续行
         while rr <= r_end:
-            rv = row_region_values(ws, rr, c1, c2, merge_idx)
+            # 使用带格式的读取函数
+            rv_with_format = row_region_values_with_format(ws, rr, c1, c2, merge_idx)
+            rv = [cell['value'] for cell in rv_with_format]  # 提取文本用于检查
 
             # 如果不是起始行，检查是否遇到标记或空行
             # 注意：不检查RULES-，因为可能存在相同RULES标记的连续行需要合并
             if rr > r0:
                 # 检查第一列（标记列）是否有新的块级标记
                 first = rv[0] if rv else ""
-                if first and (first.startswith("TITLE-") or first.startswith("RINK-")):
+                if first and (first.startswith("TITLE-") or first.startswith("RINK-") or first.startswith("RANK-")):
                     break
                 
                 # 检查内容列（rv[1:]）是否有 TABLE- 标记
@@ -290,12 +335,25 @@ def parse_section_block(ws, c1, c2, r_start, r_end, merge_idx):
                     break
 
             # 列去重：同一行中相同内容只保留一次（处理合并单元格）
+            # 同时应用居中和加粗格式
             unique_vals = []
             seen_row = set()
-            for vv in rv[1:]:
-                if vv and vv not in seen_row:
-                    unique_vals.append(vv)
-                    seen_row.add(vv)
+            for cell_info in rv_with_format[1:]:  # 跳过第一列（标记列）
+                val = cell_info['value']
+                is_bold = cell_info['bold']
+                is_center = cell_info['center']
+                
+                if val and val not in seen_row:
+                    # 先添加居中标记
+                    if is_center:
+                        val = f"[center]{val}"
+                    
+                    # 再添加加粗标记
+                    if is_bold:
+                        val = f"**{val}**"
+                    
+                    unique_vals.append(val)
+                    seen_row.add(cell_info['value'])  # 用原始值去重
 
             line_content = " ".join(unique_vals)
 
@@ -304,12 +362,13 @@ def parse_section_block(ws, c1, c2, r_start, r_end, merge_idx):
                 lines.append(line_content)
                 seen_lines.add(line_content)
             elif not line_content:
+                # 空行也保留
                 lines.append("")
 
             rr += 1
 
-        # 合并所有行文本
-        text = "\n".join([t for t in lines if t]).strip()
+        # 合并所有行文本（保留空行）
+        text = "\n".join(lines).strip()
         sections.append({"title": section_title, "content": text, "rewards": []})
         return rr
 
@@ -340,8 +399,8 @@ def parse_section_block(ws, c1, c2, r_start, r_end, merge_idx):
                 if is_row_blank(next_rv):
                     break
 
-                # 如果下一行是 TITLE 或 RINK 或 TABLE 标记，停止
-                if next_first.startswith("TITLE-") or next_first.startswith("RINK-") or next_first.startswith("TABLE-"):
+                # 如果下一行是 TITLE 或 RINK/RANK 或 TABLE 标记，停止
+                if next_first.startswith("TITLE-") or next_first.startswith("RINK-") or next_first.startswith("RANK-") or next_first.startswith("TABLE-"):
                     break
 
                 # 如果下一行也是 RULES 标记
@@ -363,22 +422,44 @@ def parse_section_block(ws, c1, c2, r_start, r_end, merge_idx):
             r = collect_rules_content(r, title)
             r_end = temp_r_end
             continue
-        if first.startswith("RINK-"):
-            sub = first.split("RINK-")[-1].strip()
-            r = collect_rewards(r, f"奖励-{sub}")
+        # 支持 RANK- 和 RINK-（兼容旧标记）
+        if first.startswith("RANK-") or first.startswith("RINK-"):
+            if first.startswith("RANK-"):
+                sub = first.split("RANK-")[-1].strip()
+            else:
+                sub = first.split("RINK-")[-1].strip()
+            r = collect_rewards(r, sub)
             continue
-        # fallback 分支：列去重（处理合并单元格）
+        # fallback 分支：列去重（处理合并单元格）并应用居中和加粗格式
+        rv_with_format = row_region_values_with_format(ws, r, c1, c2, merge_idx)
         unique_vals = []
         seen_row = set()
-        for vv in rv[1:]:
-            if vv and vv not in seen_row:
-                unique_vals.append(vv)
-                seen_row.add(vv)
+        for cell_info in rv_with_format[1:]:  # 跳过第一列（标记列）
+            val = cell_info['value']
+            is_bold = cell_info['bold']
+            is_center = cell_info['center']
+            
+            if val and val not in seen_row:
+                # 先添加居中标记
+                if is_center:
+                    val = f"[center]{val}"
+                
+                # 再添加加粗标记
+                if is_bold:
+                    val = f"**{val}**"
+                
+                unique_vals.append(val)
+                seen_row.add(cell_info['value'])  # 用原始值去重
+        
         if unique_vals:
             block_free_text.extend(unique_vals)
+        elif not any(rv_with_format[i]['value'] for i in range(1, len(rv_with_format))):
+            # 如果整行都是空的（除了标记列），添加空字符串
+            block_free_text.append("")
         r += 1
 
-    fallback_text = "\n".join([t for t in block_free_text if t]).strip()
+    # 合并 fallback 文本（保留空行）
+    fallback_text = "\n".join(block_free_text).strip()
     return sections, fallback_text
 
 

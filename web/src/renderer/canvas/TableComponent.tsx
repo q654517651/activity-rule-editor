@@ -35,6 +35,10 @@ export function TableComponent({
   // 存储已加载的图片
   const [loadedImages, setLoadedImages] = useState<Map<string, CanvasImageSource>>(new Map());
   
+  // 重试计数器，避免无限重试
+  const retryCountRef = useRef(0);
+  const maxRetries = 5;
+  
   // 加载所有表格中的图片
   useEffect(() => {
     const loadImages = async () => {
@@ -114,10 +118,13 @@ export function TableComponent({
     
     if (hasChanges) {
       setCellHeights(newHeights);
+      // 重置重试计数器
+      retryCountRef.current = 0;
     }
     
-    // 如果有未测量的节点，100ms 后重试
-    if (hasUnmeasured) {
+    // 如果有未测量的节点，且未超过最大重试次数，则重试
+    if (hasUnmeasured && retryCountRef.current < maxRetries) {
+      retryCountRef.current++;
       const timer = setTimeout(() => {
         setCellHeights(prev => new Map(prev)); // 强制触发重新渲染
       }, 100);

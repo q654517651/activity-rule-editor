@@ -292,11 +292,16 @@ export function PageCanvas({
       ? (measuredHeights.get(titleKey) || Math.ceil(style.font.size * style.font.lineHeight))
       : 0;
 
-    // section 内容高度 - 使用实际测量值或估算
-    const contentKey = `section-${sectionIdx}-content`;
-    const contentH = section.content && contentW > 0
-      ? (measuredHeights.get(contentKey) || Math.ceil(style.font.size * style.font.lineHeight * 3)) // 初始估算3行
-      : 0;
+    // section 内容高度 - 累加所有行的高度
+    let contentH = 0;
+    if (section.content && contentW > 0) {
+      const lines = section.content.split('\n');
+      contentH = lines.reduce((sum, _, lineIdx) => {
+        const lineKey = `section-${sectionIdx}-content-line-${lineIdx}`;
+        const lineHeight = measuredHeights.get(lineKey) || Math.ceil(style.font.size * style.font.lineHeight);
+        return sum + lineHeight;
+      }, 0);
+    }
 
     // section 表格区域高度 - 使用实际测量值或估算
     const tableKey = `section-${sectionIdx}-table`;
@@ -485,25 +490,62 @@ export function PageCanvas({
               />
             ) : null}
 
-            {/* Section 内容 */}
+            {/* Section 内容 - 支持单行加粗 */}
             {s.section.content ? (
-              <Text
-                ref={(node) => {
-                  if (node) {
-                    textRefs.current.set(`section-${sectionIdx}-content`, node);
-                  }
-                }}
-                text={s.section.content}
-                x={contentX}
-                y={contentY}
-                width={contentW}
-                align={textAlign}
-                fontSize={style.font.size}
-                fontFamily={style.font.family}
-                lineHeight={style.font.lineHeight}
-                fill={style.contentColor}
-                direction={direction}
-              />
+              <Group>
+                {(() => {
+                  const lines = s.section.content.split('\n');
+                  let cumulativeY = 0;
+                  
+                  return lines.map((line, lineIdx) => {
+                    let text = line;
+                    
+                    // 先检查是否整行加粗（因为后端先加居中再加粗）
+                    let isBold = false;
+                    if (text.startsWith('**') && text.endsWith('**')) {
+                      isBold = true;
+                      text = text.slice(2, -2);  // 去掉 **
+                    }
+                    
+                    // 再检查是否居中对齐
+                    let lineAlign = textAlign;  // 默认对齐方式（基于语言方向）
+                    if (text.startsWith('[center]')) {
+                      lineAlign = 'center';
+                      text = text.slice(8);  // 去掉 [center]
+                    }
+                    
+                    const displayText = text;
+                    const lineKey = `section-${sectionIdx}-content-line-${lineIdx}`;
+                    
+                    // 获取该行的测量高度（如果有），否则使用估算
+                    const lineHeight = measuredHeights.get(lineKey) || style.font.size * style.font.lineHeight;
+                    const currentY = contentY + cumulativeY;
+                    cumulativeY += lineHeight;
+                    
+                    return (
+                      <Text
+                        key={lineKey}
+                        ref={(node) => {
+                          if (node) {
+                            textRefs.current.set(lineKey, node);
+                          }
+                        }}
+                        text={displayText}
+                        x={contentX}
+                        y={currentY}
+                        width={contentW}
+                        align={lineAlign}
+                        fontSize={style.font.size}
+                        fontFamily={style.font.family}
+                        fontStyle={isBold ? 'bold' : 'normal'}
+                        lineHeight={style.font.lineHeight}
+                        fill={style.contentColor}
+                        direction={direction}
+                      />
+                    );
+                  });
+                })()}
+              </Group>
             ) : null}
 
             {/* Section 表格 */}
